@@ -1,0 +1,48 @@
+name: CLI query preflight
+
+on:
+  push:
+    branches:
+      - ci/cli-query-json-validation
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-query-preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    if: github.repository == 'Guo-Yixin/actual'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [tests, typecheck, lint, constraints, knip, build-cli]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          download-translations: 'false'
+      - name: Run validation
+        env:
+          CHECK: ${{ matrix.check }}
+        run: |
+          case "$CHECK" in
+            tests) yarn test:debug ;;
+            typecheck) yarn typecheck ;;
+            lint) yarn lint ;;
+            constraints) yarn constraints && yarn check:tsconfig-references ;;
+            knip) yarn build:plugins-service && yarn knip ;;
+            build-cli)
+              yarn build:cli
+              printf '%s' '{"table":"transactions","filter":[]}' | node packages/cli/dist/cli.js query run --file - > cli-stdout.txt 2> cli-stderr.txt && exit 1
+              grep -Fx 'Error: Query filter must be a JSON object' cli-stderr.txt
+              test ! -s cli-stdout.txt
+              ;;
+            *) exit 2 ;;
+          esac
