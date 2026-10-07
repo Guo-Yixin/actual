@@ -119,12 +119,46 @@ function buildQueryFromFile(
   parsed: Record<string, unknown>,
   fallbackTable: string | undefined,
 ) {
+  if (
+    parsed.table !== undefined &&
+    (typeof parsed.table !== 'string' || parsed.table.trim() === '')
+  ) {
+    throw new Error('Query table must be a non-empty string');
+  }
   const table = typeof parsed.table === 'string' ? parsed.table : fallbackTable;
   if (!table) {
     throw new Error(
       '--table is required when the input file lacks a "table" field',
     );
   }
+
+  if (parsed.filter !== undefined && !isRecord(parsed.filter)) {
+    throw new Error('Query filter must be a JSON object');
+  }
+  for (const field of ['select', 'orderBy', 'groupBy']) {
+    const expressions = parsed[field];
+    if (expressions === undefined) continue;
+    if (!Array.isArray(expressions)) {
+      throw new Error(`Query ${field} must be an array`);
+    }
+    if (
+      !expressions.every(value => typeof value === 'string' || isRecord(value))
+    ) {
+      throw new Error(`Query ${field} entries must be strings or JSON objects`);
+    }
+  }
+  for (const field of ['limit', 'offset']) {
+    const value = parsed[field];
+    if (value === undefined) continue;
+    if (
+      typeof value !== 'number' ||
+      !Number.isSafeInteger(value) ||
+      value < 0
+    ) {
+      throw new Error(`Query ${field} must be a non-negative safe integer`);
+    }
+  }
+
   let queryObj = api.q(table);
   if (Array.isArray(parsed.select)) queryObj = queryObj.select(parsed.select);
   if (isRecord(parsed.filter)) queryObj = queryObj.filter(parsed.filter);
@@ -301,17 +335,17 @@ export function registerQueryCommand(program: Command) {
     .addHelpText('after', RUN_EXAMPLES)
     .action(async cmdOpts => {
       const opts = program.opts();
+      const parsed = cmdOpts.file ? readJsonInput(cmdOpts) : undefined;
+      if (parsed !== undefined && !isRecord(parsed)) {
+        throw new Error('Query file must contain a JSON object');
+      }
+      const queryObj = parsed
+        ? buildQueryFromFile(parsed, cmdOpts.table)
+        : buildQueryFromFlags(cmdOpts);
+
       await withConnection(
         opts,
         async () => {
-          const parsed = cmdOpts.file ? readJsonInput(cmdOpts) : undefined;
-          if (parsed !== undefined && !isRecord(parsed)) {
-            throw new Error('Query file must contain a JSON object');
-          }
-          const queryObj = parsed
-            ? buildQueryFromFile(parsed, cmdOpts.table)
-            : buildQueryFromFlags(cmdOpts);
-
           const result = await api.aqlQuery(queryObj);
 
           if (!isRecord(result) || !('data' in result)) {
